@@ -1,4 +1,5 @@
 import numpy as np
+from autocallable_note_pricer.simulation import simulate_st_paths
 
 def autocallable_note_payoff(S, S_ref, obs_time, autocall_barrier, coupon_barrier, pdi_barrier, pdi_strike, coupon_rate, memory, nominal):
     
@@ -66,9 +67,9 @@ def autocallable_note_payoff(S, S_ref, obs_time, autocall_barrier, coupon_barrie
     pdi_loss = np.zeros(perf.shape)
     
     autocallable_note_life = [True for i in range(len(perf))]
-    lost_coupons = [0 for i in range(len(perf))]
+    lost_coupons = [0 for _ in range(len(perf))]
     exit_indice = [len(perf[0]) - 1 for i in range(len(perf))]
-    capital_loss = [False for i in range(len(perf))]
+    capital_loss = [False for _ in range(len(perf))]
     
     for i in range(len(perf)):
         for j in range(len(perf[0])):
@@ -95,18 +96,56 @@ def autocallable_note_payoff(S, S_ref, obs_time, autocall_barrier, coupon_barrie
 
     return coupons, reimburse_nominal, pdi_loss, exit_indice, capital_loss
 
-if __name__ == "__main__":
-    S = np.array([[105, 110, 120],    # rappel dès l'année 1
-                  [ 80,  65, 101],    # coupon an 1, rien an 2, coupon x2 + nominal an 3
-                  [ 90,  75,  50]],   # coupons ans 1-2, perte de 50 % à maturité
-                 dtype=float)
+def price_autocallable_note(S0, S_ref, r, d, sigma, T, obs_time, credit_spread,
+                            autocall_barrier, coupon_barrier, pdi_barrier, pdi_strike,
+                            coupon_rate, memory, nominal, n_paths, seed):
+    S = simulate_st_paths(S0, r, d, T, sigma, obs_time, n_paths, seed)
+    
+    coupons, reimburse_nominal, pdi_loss, exit_indice, capital_loss = autocallable_note_payoff(S, S_ref, obs_time, autocall_barrier, 
+                                                                                               coupon_barrier, pdi_barrier, pdi_strike, 
+                                                                                               coupon_rate, memory, nominal)
 
-    coupons, nominal, pdi_loss, exit_idx, capital_loss = autocallable_note_payoff(
-        S, S_ref=100, obs_time=1, autocall_barrier=1.00, coupon_barrier=0.70,
-        pdi_barrier=0.60, pdi_strike=1.00, coupon_rate=0.08, memory=True, nominal=100)
-
-    print("coupons :\n", coupons)
-    print("nominal :\n", nominal)
-    print("pdi_loss :\n", pdi_loss)
-    print("exit_idx :", exit_idx)
-    print("capital_loss :", capital_loss)
+    discount_factors = np.zeros(coupons.shape)
+    for i in range(len(discount_factors)):
+        for j in range(len(discount_factors[0])):
+            discount_factors[i][j] = np.exp(-1 * (r + credit_spread) * (j+1) * obs_time)
+    
+    present_value_coupons = coupons * discount_factors
+    present_value_reimburse_nominal = reimburse_nominal * discount_factors
+    present_value_pdi_loss = pdi_loss * discount_factors
+    
+    present_value = [0 for _ in range(len(coupons))]
+    
+    for i in range(len(coupons)):
+        for j in range(len(coupons[i])):
+            present_value[i] += present_value_coupons[i][j] + present_value_reimburse_nominal[i][j] + present_value_pdi_loss[i][j]
+    present_value = np.array(present_value)
+    
+    price = np.sum(present_value) / len(present_value)
+    
+    present_value_first_half, present_value_antithetic = np.split(present_value,2)
+    
+    mean_present_value = (present_value_first_half + present_value_antithetic)/2
+    
+    standard_error = np.std(mean_present_value) / np.sqrt(n_paths//2)
+    
+    
+    exit_probabilities = np.zeros(len(coupons[0]))
+    for i in range(n_paths):
+        exit_probabilities[exit_indice[i]] += 1 / n_paths
+    
+    expected_life = 0
+    for i in range(len(exit_probabilities)):
+        expected_life += (i+1)*exit_probabilities[i]*obs_time
+    
+    capital_loss_probabilities = 0
+    for i in range(len(capital_loss)):
+        if capital_loss[i]:
+            capital_loss_probabilities += 1/n_paths
+    
+    present_value_coupons_mean = present_value_coupons.sum() / n_paths
+    present_value_reimburse_nominal_mean = present_value_reimburse_nominal.sum() / n_paths
+    present_value_pdi_loss_mean = present_value_pdi_loss.sum() / n_paths 
+    
+    return (float(price), float(standard_error), present_value_coupons_mean, present_value_reimburse_nominal_mean, 
+            present_value_pdi_loss_mean, exit_probabilities, capital_loss_probabilities, expected_life)
