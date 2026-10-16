@@ -99,6 +99,79 @@ def autocallable_note_payoff(S, S_ref, obs_time, autocall_barrier, coupon_barrie
 def price_autocallable_note(S0, S_ref, r, d, sigma, T, obs_time, credit_spread,
                             autocall_barrier, coupon_barrier, pdi_barrier, pdi_strike,
                             coupon_rate, memory, nominal, n_paths, seed):
+    
+    """
+    Price an autocallable note (Phoenix or Athena) by Monte Carlo simulation.
+
+    Steps:
+        1. Simulate the underlying at each observation date (antithetic variates)
+        2. Compute the cash flows of the note on each path (coupons, nominal, PDI loss)
+        3. Discount each cash flow at its date with the risk-free rate plus the
+           issuer credit spread: DF(t) = exp(-(r + credit_spread) * t)
+        4. Average the present values over all paths
+
+    The price is decomposed into three building blocks:
+        price = PV(coupons) + PV(nominal) + PV(PDI loss)
+
+    Parameters
+    ----------
+    S0 : float
+        Spot level of the underlying at t=0
+    S_ref : float
+        Initial reference level, used to compute performances and barriers
+    r : float
+        Risk-free interest rate (continuous compounding)
+    d : float
+        Dividend yield (price index) or decrement (decrement index), per year
+    sigma : float
+        Volatility of the underlying
+    T : float
+        Maturity of the note in years
+    obs_time : float
+        Time between two observation dates in years (1 = annual, 0.25 = quarterly)
+    credit_spread : float
+        Issuer credit spread added to r for discounting (0 = no issuer risk)
+    autocall_barrier : float
+        Autocall barrier as a percentage of S_ref (e.g. 1.00)
+    coupon_barrier : float
+        Coupon barrier as a percentage of S_ref (e.g. 0.70)
+    pdi_barrier : float
+        Capital protection barrier at maturity as a percentage of S_ref (e.g. 0.60)
+    pdi_strike : float
+        Strike of the down-and-in put as a percentage of S_ref (usually 1.00)
+    coupon_rate : float
+        Annual coupon rate (e.g. 0.08 for 8% per year)
+    memory : bool
+        If True, missed coupons are paid back when the coupon condition is met again
+    nominal : float
+        Nominal amount invested (e.g. 100)
+    n_paths : int
+        Number of Monte Carlo paths, must be even (antithetic variates)
+    seed : int
+        Seed of the random generator (same seed = same paths)
+
+    Returns
+    -------
+    tuple of 8 elements, in this order:
+        price : float
+            Monte Carlo price of the note
+        standard_error : float
+            Standard error of the price, computed on antithetic pair averages
+        pv_coupons : float
+            Present value of the coupons
+        pv_nominal : float
+            Present value of the nominal repaid (autocall or maturity)
+        pv_pdi_loss : float
+            Present value of the capital loss at maturity (negative or zero)
+        exit_probabilities : np.ndarray of shape (n_obs,)
+            Probability that the note ends at each observation date
+            (the last element is the probability of reaching maturity)
+        capital_loss_probability : float
+            Probability that the investor loses capital at maturity
+        expected_life : float
+            Expected life of the note in years
+    """
+    
     S = simulate_st_paths(S0, r, d, T, sigma, obs_time, n_paths, seed)
     
     coupons, reimburse_nominal, pdi_loss, exit_indice, capital_loss = autocallable_note_payoff(S, S_ref, obs_time, autocall_barrier, 
